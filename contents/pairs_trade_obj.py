@@ -102,7 +102,7 @@ class Pairs_Trade():
         if return_percentage:
             return stationarity_count / total_count * 100
 
-    def run_algo(self, start_date=date.today().year- 1, end_date=date.today(), step_input = 5, return_table=False):
+    def run_algo(self, method = 1,start_date=date.today().year- 1, end_date=date.today(), step_input = 5, return_table=False):
             # - - - Run the Algorithm - - -
         # - - - Initialize post data and pre data sets - - -
         # - - - We only use data from before the specified start date - - -
@@ -141,8 +141,7 @@ class Pairs_Trade():
         # - - - Loop through the post data set - - -
         while post_idx < (len(self.df) - len(data_cutoff)):
             # ----
-            # Update the beta every step and close any positions if the z-score is not stationary
-
+        # Update the beta every step and close any positions if the z-score is not stationary
             month_ago = self.df.index[post_idx] - pd.DateOffset(months=2)
             current_pre_data = self.df[(self.df.index < self.df.index[post_idx + 1]) & (self.df.index >= month_ago)]
             x1constant = sm.add_constant(current_pre_data[f'{self.symbol_list[0]} Return'])
@@ -155,22 +154,31 @@ class Pairs_Trade():
             mask = self.df['Z-Score'].isna()
             self.df.loc[mask, 'Z-Score'] = self.z[mask]
             #if check_for_stationarity(self.z, print_results=False) is not True:
-             #   print(f"Start Date: {current_pre_data.index[0]} End Date: {current_pre_data.index[-1]} not Stationary. Not entering any new positions until stationarity is restored.")
-            # ---- 
-            # Recalculate Buy and Sell thresholds
-            std = self.z.std()
-            self.df.loc[self.df.index[post_idx], 'Long'] = self.z.mean() - std
-            self.df.loc[self.df.index[post_idx], 'Short'] = self.z.mean() + std
-            self.df.loc[self.df.index[post_idx], 'Long2'] = self.z.mean() - (std * 2)
-            self.df.loc[self.df.index[post_idx], 'Short2'] = self.z.mean() + (std * 2)
-            self.df.loc[self.df.index[post_idx], 'Exit'] = self.z.mean()
+            #   print(f"Start Date: {current_pre_data.index[0]} End Date: {current_pre_data.index[-1]} not Stationary. Not entering any new positions until stationarity is restored.")
+            if method == 1:
+                # Method 1 Calculates the thresholds base on the standard deviation of the z-score -> think bollinger bands
+                std = self.z.std()
+                self.df.loc[self.df.index[post_idx], 'Long'] = self.z.mean() - std
+                self.df.loc[self.df.index[post_idx], 'Short'] = self.z.mean() + std
+                self.df.loc[self.df.index[post_idx], 'Long2'] = self.z.mean() - (std * 2)
+                self.df.loc[self.df.index[post_idx], 'Short2'] = self.z.mean() + (std * 2)
+                self.df.loc[self.df.index[post_idx], 'Exit'] = self.z.mean()
 
-            self.df.loc[:self.df.index[post_idx], 'Long'] = self.df.loc[:self.df.index[post_idx], 'Long'].ffill()
-            self.df.loc[:self.df.index[post_idx], 'Short'] = self.df.loc[:self.df.index[post_idx], 'Short'].ffill()
-            self.df.loc[:self.df.index[post_idx], 'Long2'] = self.df.loc[:self.df.index[post_idx], 'Long2'].ffill()
-            self.df.loc[:self.df.index[post_idx], 'Short2'] = self.df.loc[:self.df.index[post_idx], 'Short2'].ffill()
-            self.df.loc[:self.df.index[post_idx], 'Exit'] = self.df.loc[:self.df.index[post_idx], 'Exit'].ffill()
-            
+                self.df.loc[:self.df.index[post_idx], 'Long'] = self.df.loc[:self.df.index[post_idx], 'Long'].ffill()
+                self.df.loc[:self.df.index[post_idx], 'Short'] = self.df.loc[:self.df.index[post_idx], 'Short'].ffill()
+                self.df.loc[:self.df.index[post_idx], 'Long2'] = self.df.loc[:self.df.index[post_idx], 'Long2'].ffill()
+                self.df.loc[:self.df.index[post_idx], 'Short2'] = self.df.loc[:self.df.index[post_idx], 'Short2'].ffill()
+                self.df.loc[:self.df.index[post_idx], 'Exit'] = self.df.loc[:self.df.index[post_idx], 'Exit'].ffill()
+            elif method == 2:
+                # Method 2 calculates the thresholds based on the percentiles of the ratio from the entire universe of previous data
+                percentiles = [5, 10, 50, 90, 95]
+                self.p = np.percentile(self.z, percentiles)
+                self.df.loc[self.df.index[post_idx], 'Long'] = self.p[0]
+                self.df.loc[self.df.index[post_idx], 'Long2'] = self.p[1]
+                self.df.loc[self.df.index[post_idx], 'Short'] = self.p[4]
+                self.df.loc[self.df.index[post_idx], 'Short2'] = self.p[3]
+                self.df.loc[self.df.index[post_idx], 'Exit'] = self.p[2]
+                    
             start_date = self.df.index[post_idx]
         # generate a buy signal when the ratio CROSSES below the long theshold
             if self.z.iloc[-2] >= self.df['Long'].iloc[post_idx] and self.z.iloc[-1] < self.df['Long'].iloc[post_idx]:
@@ -240,19 +248,22 @@ class Pairs_Trade():
             #only show the below columns
             return self.df[['Day Count', 'Z-Score', 'Long', 'Short', 'Long2', 'Short2', 'Exit', 'Action', 'Buy Signal Primary', 'Sell Signal Secondary', 'Sell Signal Primary', 'Buy Signal Secondary']]
 
-    def backtest_percent_of_equity(self, print_statement=True, return_table=False, model_return=False, buy_hold=False, return_model_df=False):
+    def backtest(self, method='equity', print_statement=True, return_table=False, model_return=False, buy_hold=False, return_model_df=False):
         # this backtest assumes that we are using a percentage of our equity to trade, rather than a fixed amount
         initial_investment = 10000
         cash = initial_investment
-        cash_spent_1 = 0
-        cash_spent_2 = 0
         total_cash_spent_1 = 0
         total_cash_spent_2 = 0
         shares_1 = 0
         shares_2 = 0
         long_value = 0
         short_value = 0
-        trade_weight = .5 # for every trade signal, we will invest some percent of our cash
+        if method == 'equity':
+            trade_weight = 0.5 # for every trade signal, we will invest some percent of our cash
+            cash_spent_1 = 0
+            cash_spent_2 = 0
+        if method == 'cash':
+            percent = 0.1 # for every trade signal, we will invest 10% of our cash
         portfolio_value = []
 
         share_cost_1 = self.df[f"{self.symbol_list[0]} Previous Close"].iloc[0]
@@ -267,155 +278,105 @@ class Pairs_Trade():
             cash_1 = cash /2
             cash_2 = cash /2
             if action == 'Buy to Open' and cash > 0:
-                shares_1 = ((cash_1 * trade_weight) / price_1) + shares_1
-                shares_2 = ((cash_2 * trade_weight) / price_2) + shares_2
-                cash_spent_1 = (cash_1 * trade_weight)
-                cash_spent_2 = (cash_2 * trade_weight)
-                total_cash_spent_1 += cash_spent_1
-                total_cash_spent_2 += cash_spent_2
-                avg_price_1 = total_cash_spent_1 / shares_1
-                avg_price_2 = total_cash_spent_2 / shares_2
-                long_price_1 = avg_price_1
-                long_price_2 = avg_price_2
-                long_value = (shares_1 * price_1) + (shares_2 * price_2)
-                cash = cash - (cash_spent_1 + cash_spent_2)
+                if method == 'equity':
+                    shares_1 = ((cash_1 * trade_weight) / price_1) + shares_1
+                    shares_2 = ((cash_2 * trade_weight) / price_2) + shares_2
+                    cash_spent_1 = (cash_1 * trade_weight)
+                    cash_spent_2 = (cash_2 * trade_weight)
+                    total_cash_spent_1 += cash_spent_1
+                    total_cash_spent_2 += cash_spent_2
+                    avg_price_1 = total_cash_spent_1 / shares_1
+                    avg_price_2 = total_cash_spent_2 / shares_2
+                    long_price_1 = avg_price_1
+                    long_price_2 = avg_price_2
+                    long_value = (shares_1 * price_1) + (shares_2 * price_2)
+                    cash = cash - (cash_spent_1 + cash_spent_2)
+                elif method == 'cash':
+                    beginning_cash_1 = cash_1 + total_cash_spent_1
+                    beginning_cash_2 = cash_2 + total_cash_spent_2
+                    trade_amt_1 = beginning_cash_1 * percent
+                    trade_amt_2 = beginning_cash_2 * percent
+                    shares_1 = (trade_amt_1 / price_1) + shares_1
+                    shares_2 = (trade_amt_2 / price_2) + shares_2
+                    total_cash_spent_1 += trade_amt_1
+                    total_cash_spent_2 += trade_amt_2
+                    avg_price_1 = total_cash_spent_1 / shares_1
+                    avg_price_2 = total_cash_spent_2 / shares_2
+                    long_value = (shares_1 * price_1) + (shares_2 * price_2)
+                    cash = cash - (trade_amt_1 + trade_amt_2)
             elif action == 'Sell to Close' and shares_1 > 0:
-                cash = (shares_1 * long_price_1) + ((shares_1 * long_price_1) * ((price_1 - long_price_1) / long_price_1)) + (shares_2 * long_price_2) - ((shares_2 * long_price_2) * ((price_2 - long_price_2) / long_price_2)) + cash
-                shares_1 = 0
-                shares_2 = 0
-                long_value = 0
-                avg_price_1 = 0
-                long_price_1 = 0
-                avg_price_2 = 0
-                long_price_2 = 0
-                cash_spent_1 = 0
-                total_cash_spent_1 = 0
-                cash_spent_2 = 0
-                total_cash_spent_2 = 0
+                if method == 'equity':
+                    cash = (shares_1 * long_price_1) + ((shares_1 * long_price_1) * ((price_1 - long_price_1) / long_price_1)) + (shares_2 * long_price_2) - ((shares_2 * long_price_2) * ((price_2 - long_price_2) / long_price_2)) + cash
+                    shares_1 = 0
+                    shares_2 = 0
+                    long_value = 0
+                    avg_price_1 = 0
+                    long_price_1 = 0
+                    avg_price_2 = 0
+                    long_price_2 = 0
+                    cash_spent_1 = 0
+                    total_cash_spent_1 = 0
+                    cash_spent_2 = 0
+                    total_cash_spent_2 = 0
+                elif method == 'cash':
+                    cash = (shares_1 * avg_price_1) + ((shares_1 * avg_price_1) * ((price_1 - avg_price_1) / avg_price_1)) + (shares_2 * avg_price_2) - ((shares_2 * avg_price_2) * ((price_2 - avg_price_2) / avg_price_2)) + cash
+                    shares_1 = 0
+                    shares_2 = 0
+                    long_value = 0
+                    avg_price_1 = 0
+                    avg_price_2 = 0
+                    total_cash_spent_1 = 0
+                    total_cash_spent_2 = 0
             elif action == 'Sell to Open' and cash > 0:
-                shares_1 = ((cash_1 * trade_weight) / price_1) + shares_1
-                shares_2 = ((cash_2 * trade_weight) / price_2) + shares_2
-                cash_spent_1 = (cash_1 * trade_weight)
-                cash_spent_2 = (cash_2 * trade_weight)
-                total_cash_spent_1 += cash_spent_1
-                total_cash_spent_2 += cash_spent_2
-                avg_price_1 = total_cash_spent_1 / shares_1
-                avg_price_2 = total_cash_spent_2 / shares_2
-                short_price_1 = avg_price_1
-                short_price_2 = avg_price_2
-                short_value = (shares_1 * price_1) + (shares_2 * price_2)
-                cash = cash - (cash_spent_1 + cash_spent_2)
+                if method == 'equity':
+                    shares_1 = ((cash_1 * trade_weight) / price_1) + shares_1
+                    shares_2 = ((cash_2 * trade_weight) / price_2) + shares_2
+                    cash_spent_1 = (cash_1 * trade_weight)
+                    cash_spent_2 = (cash_2 * trade_weight)
+                    total_cash_spent_1 += cash_spent_1
+                    total_cash_spent_2 += cash_spent_2
+                    avg_price_1 = total_cash_spent_1 / shares_1
+                    avg_price_2 = total_cash_spent_2 / shares_2
+                    short_price_1 = avg_price_1
+                    short_price_2 = avg_price_2
+                    short_value = (shares_1 * price_1) + (shares_2 * price_2)
+                    cash = cash - (cash_spent_1 + cash_spent_2)
+                elif method == 'cash':
+                    beginning_cash_1 = cash_1 + total_cash_spent_1
+                    beginning_cash_2 = cash_2 + total_cash_spent_2
+                    trade_amt_1 = beginning_cash_1 * percent
+                    trade_amt_2 = beginning_cash_2 * percent
+                    shares_1 = (trade_amt_1 / price_1) + shares_1
+                    shares_2 = (trade_amt_2 / price_2) + shares_2
+                    total_cash_spent_1 += trade_amt_1
+                    total_cash_spent_2 += trade_amt_2
+                    avg_price_1 = total_cash_spent_1 / shares_1
+                    avg_price_2 = total_cash_spent_2 / shares_2
+                    short_value = (shares_1 * price_1) + (shares_2 * price_2)
+                    cash = cash - (trade_amt_1 + trade_amt_2)
             elif action == 'Buy to Close' and shares_1 > 0:
-                cash = (shares_1 * short_price_1) - ((shares_1 * short_price_1) * ((price_1 - short_price_1) / short_price_1)) + (shares_2 * short_price_2) + ((shares_2 * short_price_2) * ((price_2 - short_price_2) / short_price_2)) + cash
-                shares_1 = 0
-                shares_2 = 0
-                short_value = 0
-                avg_price_1 = 0
-                avg_price_2 = 0
-                short_price_1 = 0
-                short_price_2 = 0
-                cash_spent_1 = 0
-                total_cash_spent_1 = 0
-                cash_spent_2 = 0
-                total_cash_spent_2 = 0
-            elif action == "Hold (Short)":
-                short_value = (shares_1 * price_1) + (shares_2 * price_2)
-            elif action == 'Hold (Long)':
-                long_value = (shares_1 * price_1) + (shares_2 * price_2)
-
-            model_value = (cash + long_value + short_value)
-            portfolio_value.append(model_value)
-        self.df['Model Value'] = portfolio_value
-                #dropping unnecessary columns
-        if 'Volume' in self.df.columns:
-                self.df.drop(columns=['Volume'], inplace = True)
-        if 'Previous Bin' in self.df.columns:
-                self.df.drop(columns=['Previous Bin'], inplace = True)
-        if 'Current Bin' in self.df.columns:
-                self.df.drop(columns=['Current Bin'], inplace = True)
-        
-        if print_statement:
-            print(f"{self.symbol_list[0]} Buy/Hold Result: {round(((self.df['Buy/Hold Value'].iloc[-1] - self.df['Buy/Hold Value'].iloc[0])/self.df['Buy/Hold Value'].iloc[0]) * 100, 2)}%")
-            print(f"{self.symbol_list[0]} and {self.symbol_list[1]} Model Result: {round(((self.df['Model Value'].iloc[-1] - self.df['Model Value'].iloc[0])/self.df['Model Value'].iloc[0]) * 100, 2)}%")
-            print(f" from {self.df.index[0]} to {self.df.index[-1]}")
-        if return_table:
-            return self.df
-        if model_return:
-            return round(((self.df['Model Value'].iloc[-1] - self.df['Model Value'].iloc[0])/self.df['Model Value'].iloc[0]) * 100, 2)
-        if buy_hold:
-            return round(((self.df['Buy/Hold Value'].iloc[-1] - self.df['Buy/Hold Value'].iloc[0])/self.df['Buy/Hold Value'].iloc[0]) * 100, 2)
-        if return_model_df:
-            return self.df['Model Value']
-        
-    def backtest_cash(self, print_statement=True, return_table=False, model_return=False, buy_hold=False, return_model_df=False):
-        # this backtest assumes that we are using a fixed amount of cash to trade
-        initial_investment = 10000
-        cash = initial_investment
-        total_cash_spent_1 = 0
-        total_cash_spent_2 = 0
-        shares_1 = 0
-        shares_2 = 0
-        long_value = 0
-        short_value = 0
-        percent = 0.1 # for every trade signal, we will invest 10% of our cash
-        portfolio_value = []
-
-        share_cost_1 = self.df[f"{self.symbol_list[0]} Previous Close"].iloc[0]
-        num_shares_1 = initial_investment / share_cost_1
-        self.df['Buy/Hold Value'] = num_shares_1 * self.df[f'Close {self.symbol_list[0]}']
-        self.df['Model Value'] = 0
-
-        # Iterate through the DataFrame
-        for i in range(0,len(self.df)):
-            action = self.df['Action'].iloc[i]
-            price_1 = self.df[f'{self.symbol_list[0]} Previous Close'].iloc[i]
-            price_2 = self.df[f'{self.symbol_list[1]} Previous Close'].iloc[i]
-            cash_1 = cash / 2
-            cash_2 = cash / 2
-            if action == 'Buy to Open' and cash > 0:
-                beginning_cash_1 = cash_1 + total_cash_spent_1
-                beginning_cash_2 = cash_2 + total_cash_spent_2
-                trade_amt_1 = beginning_cash_1 * percent
-                trade_amt_2 = beginning_cash_2 * percent
-                shares_1 = (trade_amt_1 / price_1) + shares_1
-                shares_2 = (trade_amt_2 / price_2) + shares_2
-                total_cash_spent_1 += trade_amt_1
-                total_cash_spent_2 += trade_amt_2
-                avg_price_1 = total_cash_spent_1 / shares_1
-                avg_price_2 = total_cash_spent_2 / shares_2
-                long_value = (shares_1 * price_1) + (shares_2 * price_2)
-                cash = cash - (trade_amt_1 + trade_amt_2)
-            elif action == 'Sell to Close' and shares_1 > 0:
-                cash = (shares_1 * avg_price_1) + ((shares_1 * avg_price_1) * ((price_1 - avg_price_1) / avg_price_1)) + (shares_2 * avg_price_2) - ((shares_2 * avg_price_2) * ((price_2 - avg_price_2) / avg_price_2)) + cash
-                shares_1 = 0
-                shares_2 = 0
-                long_value = 0
-                avg_price_1 = 0
-                avg_price_2 = 0
-                total_cash_spent_1 = 0
-                total_cash_spent_2 = 0
-            elif action == 'Sell to Open' and cash > 0:
-                beginning_cash_1 = cash_1 + total_cash_spent_1
-                beginning_cash_2 = cash_2 + total_cash_spent_2
-                trade_amt_1 = beginning_cash_1 * percent
-                trade_amt_2 = beginning_cash_2 * percent
-                shares_1 = (trade_amt_1 / price_1) + shares_1
-                shares_2 = (trade_amt_2 / price_2) + shares_2
-                total_cash_spent_1 += trade_amt_1
-                total_cash_spent_2 += trade_amt_2
-                avg_price_1 = total_cash_spent_1 / shares_1
-                avg_price_2 = total_cash_spent_2 / shares_2
-                short_value = (shares_1 * price_1) + (shares_2 * price_2)
-                cash = cash - (trade_amt_1 + trade_amt_2)
-            elif action == 'Buy to Close' and shares_1 > 0:
-                cash = (shares_1 * avg_price_1) - ((shares_1 * avg_price_1) * ((price_1 - avg_price_1) / avg_price_1)) + (shares_2 * avg_price_2) + ((shares_2 * avg_price_2) * ((price_2 - avg_price_2) / avg_price_2)) + cash
-                shares_1 = 0
-                shares_2 = 0
-                short_value = 0
-                avg_price_1 = 0
-                avg_price_2 = 0
-                total_cash_spent_1 = 0
-                total_cash_spent_2 = 0
+                if method == 'equity':
+                    cash = (shares_1 * short_price_1) - ((shares_1 * short_price_1) * ((price_1 - short_price_1) / short_price_1)) + (shares_2 * short_price_2) + ((shares_2 * short_price_2) * ((price_2 - short_price_2) / short_price_2)) + cash
+                    shares_1 = 0
+                    shares_2 = 0
+                    short_value = 0
+                    avg_price_1 = 0
+                    avg_price_2 = 0
+                    short_price_1 = 0
+                    short_price_2 = 0
+                    cash_spent_1 = 0
+                    total_cash_spent_1 = 0
+                    cash_spent_2 = 0
+                    total_cash_spent_2 = 0
+                elif method == 'cash':
+                    cash = (shares_1 * avg_price_1) - ((shares_1 * avg_price_1) * ((price_1 - avg_price_1) / avg_price_1)) + (shares_2 * avg_price_2) + ((shares_2 * avg_price_2) * ((price_2 - avg_price_2) / avg_price_2)) + cash
+                    shares_1 = 0
+                    shares_2 = 0
+                    short_value = 0
+                    avg_price_1 = 0
+                    avg_price_2 = 0
+                    total_cash_spent_1 = 0
+                    total_cash_spent_2 = 0
             elif action == "Hold (Short)":
                 short_value = (shares_1 * price_1) + (shares_2 * price_2)
             elif action == 'Hold (Long)':
