@@ -34,7 +34,6 @@ class Pairs_Trade():
         self.interval = interval
         self.df[f'{self.symbol_list[0]} Previous Close'] = self.x1.shift(1)
         self.df[f'{self.symbol_list[1]} Previous Close'] = self.x2.shift(1)
-        self.df.dropna(inplace=True)
 
         # Group of data that will be recalculated every x steps
         self.df['Long'] = np.nan
@@ -45,6 +44,7 @@ class Pairs_Trade():
         self.df['Z-Score'] = np.nan
 
     def robust_stationarity_test(self, end_date=date.today(), step_input=5, return_percentage=False):
+        self.df.dropna(inplace=True)
         start_date = self.df.index[0]
         days = 60
         if self.df.index.tz is not None:
@@ -102,7 +102,7 @@ class Pairs_Trade():
         if return_percentage:
             return stationarity_count / total_count * 100
 
-    def run_algo(self, method = 1,start_date=date.today().year- 1, end_date=date.today(), step_input = 5, return_table=False):
+    def run_algo(self, method = 1, start_date=date.today().year- 1, end_date=date.today(), return_table=False):
             # - - - Run the Algorithm - - -
         # - - - Initialize post data and pre data sets - - -
         # - - - We only use data from before the specified start date - - -
